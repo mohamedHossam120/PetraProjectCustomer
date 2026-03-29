@@ -1,94 +1,66 @@
-const { db } = require('../config/db');
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
+const { db } = require('../config/db'); 
+
+const checkUserExists = async (email, username) => {
+    const sql = 'SELECT user_email FROM users WHERE user_email = ? OR user_name = ?';
+    const [rows] = await db.execute(sql, [email, username]);
+    return rows.length > 0;
+};
+
 
 exports.createAdminUser = async (req, res) => {
-    const { name, username, email, password, confirmPassword, userType, contactNumber, status, address, description } = req.body;
-    
-    if (password !== confirmPassword) return res.status(400).json({ message: "Passwords do not match" });
+    const { 
+        name, username, email, password, 
+        contactNumber, status, address, description 
+    } = req.body;
+
+    if (!name || !email || !password || !username) {
+        return res.status(400).json({ message: "Please fill all required fields" });
+    }
 
     try {
+        const exists = await checkUserExists(email, username);
+        if (exists) {
+            return res.status(400).json({ message: "Email or Username already exists" });
+        }
+
         const hashedPassword = await bcrypt.hash(password, 10);
-        const sql = `INSERT INTO users (name, username, email, password, role, phone, status, address, description) 
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+        const sql = `INSERT INTO users (
+            user_name, 
+            user_email, 
+            user_pass, 
+            user_phone, 
+            user_address, 
+            user_role, 
+            user_status,
+            user_description
+        ) VALUES (?, ?, ?, ?, ?, 'admin__user', ?, ?)`;
         
-        await db.execute(sql, [name, username, email, hashedPassword, userType, contactNumber, status, address, description]);
-        res.status(201).json({ message: "Admin user created successfully" });
-    } catch (err) {
-        if (err.code === 'ER_DUP_ENTRY') return res.status(400).json({ message: "Email or Username already exists" });
-        res.status(500).json({ message: "Error", error: err.message });
-    }
-};
+        const userStatus = status ? 'active' : 'inactive';
 
-exports.userLogin = async (req, res) => {
-    const { email, password } = req.body;
-    try {
-        const [rows] = await db.execute('SELECT * FROM users WHERE email = ?', [email]);
-        const user = rows[0];
+        const values = [
+            name, 
+            email, 
+            hashedPassword, 
+            contactNumber, 
+            address || null, 
+            userStatus, 
+            description || null
+        ];
+        
+        await db.execute(sql, values);
 
-        if (!user || !(await bcrypt.compare(password, user.password))) {
-            return res.status(401).json({ message: "Invalid email or password" });
-        }
-
-        if (user.status !== 'active') {
-            return res.status(403).json({ message: `Account is ${user.status}` });
-        }
-
-        const token = jwt.sign(
-            { id: user.id, role: user.role }, 
-            process.env.JWT_SECRET, 
-            { expiresIn: '1d' }
-        );
-
-        res.json({
-            message: "Login successful",
-            token,
-            user: { id: user.id, name: user.name, role: user.role }
+        return res.status(201).json({ 
+            success: true,
+            message: "Admin User created successfully" 
         });
+
     } catch (err) {
-        res.status(500).json({ message: "Server error" });
-    }
-};
-
-exports.getAllUsers = async (req, res) => {
-    try {
-        const [rows] = await db.execute('SELECT id, name, username, email, role, status, phone, profile_image FROM users');
-        res.json(rows);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-};
-
-exports.updateAdminUser = async (req, res) => {
-    const userId = req.params.id;
-    const { name, username, email, phone, status, address, description } = req.body;
-    
-    const imageURL = req.file ? req.file.path : null; 
-
-    try {
-        let sql = `UPDATE users SET name=?, username=?, email=?, phone=?, status=?, address=?, description=?`;
-        let params = [name, username, email, phone, status, address, description];
-
-        if (imageURL) {
-            sql += `, profile_image=?`;
-            params.push(imageURL);
-        }
-
-        sql += ` WHERE id=?`;
-        params.push(userId);
-
-        await db.execute(sql, params);
-        res.json({ message: "User updated successfully", image: imageURL });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-};
-
-exports.deleteAdminUser = async (req, res) => {
-    try {
-        await db.execute('DELETE FROM users WHERE id = ?', [req.params.id]);
-        res.json({ message: "User deleted successfully" });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error("Database Error:", err);
+        return res.status(500).json({ 
+            message: "Error creating admin user", 
+            error: err.message 
+        });
     }
 };
